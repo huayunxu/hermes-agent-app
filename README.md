@@ -5,7 +5,7 @@ Hermes Agent Android is a native Kotlin prototype for a Doubao-style AI companio
 - Text chat with streaming-ready state management
 - Voice message mode with Android speech recognition and text-to-speech
 - Voice call entry point for future realtime sessions
-- Video mode with camera preview scaffolding
+- Video mode entry point for future realtime sessions
 - Slash command support, including `/model <default|fast|smart|vision>`
 - Human approval cards for tool-style operations that require confirmation
 - A replaceable `HermesAgentService` boundary for connecting the real Hermes backend
@@ -24,7 +24,7 @@ For Hermes Agent, a native Android app is the right first client if voice and ca
 app/src/main/java/com/hermes/agent/
   MainActivity.kt
   agent/                  Agent service boundary and local prototype service
-  camera/                 Camera preview component
+  camera/                 Video surface placeholder
   data/                   UI/domain models
   ui/                     Compose screens and theme
   viewmodel/              Conversation state
