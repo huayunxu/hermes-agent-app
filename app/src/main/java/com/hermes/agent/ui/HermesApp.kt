@@ -30,7 +30,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -463,17 +462,28 @@ private fun ModeItem(
     label: String,
     onClick: (ConversationMode) -> Unit
 ) {
-    NavigationBarItem(
-        selected = selectedMode == mode,
-        onClick = { onClick(mode) },
-        icon = {
+    TextButton(onClick = { onClick(mode) }) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Icon(
                 imageVector = modeIcon(mode),
-                contentDescription = label
+                contentDescription = label,
+                tint = if (selectedMode == mode) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                }
             )
-        },
-        label = { Text(label) }
-    )
+            Text(
+                text = label,
+                color = if (selectedMode == mode) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
+                style = MaterialTheme.typography.labelSmall
+            )
+        }
+    }
 }
 
 private fun modeIcon(mode: ConversationMode) = when (mode) {
