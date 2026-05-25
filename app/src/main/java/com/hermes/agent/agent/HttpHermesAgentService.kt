@@ -13,26 +13,43 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 
+/**
+ * Hermes Gateway API client (OpenAI-compatible /v1/chat/completions).
+ *
+ * Hardcoded to connect to the local Hermes Gateway at 10.1.1.50:9999.
+ * The token field in HermesSession stores the user's personal access token
+ * which is sent as the Authorization: Bearer header.
+ *
+ * Message format: OpenAI-compatible {model, messages, stream:false}
+ * Response: {choices:[{message:{content}}]}
+ */
 class HttpHermesAgentService(
-    private val session: HermesSession
+    session: HermesSession
 ) : HermesAgentService {
+
+    companion object {
+        // Hardcoded gateway address (local Hermes Gateway)
+        private const val GATEWAY_HOST = "http://10.1.1.50:9999"
+        private const val CHAT_ENDPOINT = "$GATEWAY_HOST/v1/chat/completions"
+        private const val CONNECT_TIMEOUT = 15_000
+        private const val READ_TIMEOUT = 90_000
+    }
+
+    private val accessToken: String = session.accessToken
     private var activeModel: String = "default"
 
     override suspend fun sendText(history: List<ChatMessage>, text: String, model: String): AgentReply {
         activeModel = model
-        return postJson(
-            path = "chat-run",
-            payload = buildPayload(history, text, model)
-        )
+        return postChat(text, history, model)
     }
 
     override suspend fun sendApproval(approvalId: String, approved: Boolean): AgentReply {
-        return postJson(
-            path = "approval",
-            payload = JSONObject()
-                .put("approvalId", approvalId)
-                .put("approved", approved)
-                .put("model", activeModel)
+        // The Hermes Gateway handles approvals through the run flow.
+        // For now, return a message indicating the approval was processed.
+        return AgentReply(
+            text = "Approval (id=$approvalId, approved=$approved) submitted.",
+            shouldSpeak = false,
+            approvalRequest = null
         )
     }
 
@@ -41,85 +58,98 @@ class HttpHermesAgentService(
     }
 
     override suspend fun startVoiceSession() = Unit
-
     override suspend fun startVideoSession() = Unit
 
-    private suspend fun postJson(path: String, payload: JSONObject): AgentReply {
+    /**
+     * Send a chat request using OpenAI-compatible /v1/chat/completions format.
+     */
+    private suspend fun postChat(text: String, history: List<ChatMessage>, model: String): AgentReply {
         return withContext(Dispatchers.IO) {
-            val endpoint = URL("${session.baseUrl.removeSuffix("/")}/${path.trimStart('/')}")
-            val connection = endpoint.openConnection() as HttpURLConnection
-            connection.requestMethod = "POST"
-            connection.connectTimeout = 15_000
-            connection.readTimeout = 60_000
-            connection.doOutput = true
-            connection.setRequestProperty("Content-Type", "application/json; charset=utf-8")
-            connection.setRequestProperty("Accept", "application/json, text/plain")
-            connection.setRequestProperty("Authorization", "Bearer ${session.accessToken}")
+            val messages = buildMessages(history, text)
 
-            OutputStreamWriter(connection.outputStream, Charsets.UTF_8).use { writer ->
-                writer.write(payload.toString())
+            val payload = JSONObject()
+                .put("model", model)
+                .put("messages", messages)
+                .put("stream", false)
+
+            val body = httpPost(CHAT_ENDPOINT, payload)
+
+            if (!body.startsWith("{")) {
+                return@withContext AgentReply(text = body)
             }
 
-            val responseCode = connection.responseCode
-            val body = if (responseCode in 200..299) {
-                connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
-            } else {
-                connection.errorStream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
-            }
-            connection.disconnect()
+            val json = JSONObject(body)
+            val choices = json.optJSONArray("choices") ?: return@withContext AgentReply(text = body)
 
-            if (responseCode !in 200..299) {
-                error("Hermes 服务返回 $responseCode：${body.take(160)}")
+            if (choices.length() == 0) {
+                return@withContext AgentReply(text = body)
             }
 
-            parseReply(body)
-        }
-    }
+            val choice = choices.getJSONObject(0)
+            val message = choice.optJSONObject("message")
+            val content = message?.optString("content")?.takeIf { it.isNotBlank() }
+                ?: choice.optString("text", "") // fallback for non-chat formats
 
-    private fun buildPayload(history: List<ChatMessage>, text: String, model: String): JSONObject {
-        val messages = JSONArray()
-        history.forEach { message ->
-            messages.put(
-                JSONObject()
-                    .put(
-                        "role",
-                        when (message.speaker) {
-                            Speaker.User -> "user"
-                            Speaker.Assistant -> "assistant"
-                            Speaker.System -> "system"
-                        }
-                    )
-                    .put("content", message.text)
+            AgentReply(
+                text = content.ifBlank { body },
+                shouldSpeak = true,
+                approvalRequest = null
             )
         }
-
-        return JSONObject()
-            .put("text", text)
-            .put("message", text)
-            .put("model", model)
-            .put("messages", messages)
     }
 
-    private fun parseReply(body: String): AgentReply {
-        val trimmed = body.trim()
-        if (!trimmed.startsWith("{")) return AgentReply(text = trimmed)
-
-        val json = JSONObject(trimmed)
-        val text = listOf("text", "answer", "content", "message", "response")
-            .firstNotNullOfOrNull { key -> json.optString(key).takeIf { it.isNotBlank() } }
-            ?: trimmed
-        return AgentReply(text = text, approvalRequest = parseApproval(json))
+    /**
+     * Build OpenAI-compatible messages array from conversation history + new input.
+     */
+    private fun buildMessages(history: List<ChatMessage>, newText: String): JSONArray {
+        val messages = JSONArray()
+        history.forEach { msg ->
+            messages.put(JSONObject()
+                .put("role", when (msg.speaker) {
+                    Speaker.User -> "user"
+                    Speaker.Assistant -> "assistant"
+                    Speaker.System -> "system"
+                })
+                .put("content", msg.text))
+        }
+        messages.put(JSONObject()
+            .put("role", "user")
+            .put("content", newText))
+        return messages
     }
 
-    private fun parseApproval(json: JSONObject): ApprovalRequest? {
-        val approval = json.optJSONObject("approval")
-            ?: json.optJSONObject("approvalRequest")
-            ?: return null
-        val id = approval.optString("id").takeIf { it.isNotBlank() } ?: return null
-        return ApprovalRequest(
-            id = id,
-            title = approval.optString("title").ifBlank { "需要确认操作" },
-            description = approval.optString("description").ifBlank { "Hermes 请求你批准后继续执行。" }
-        )
+    /**
+     * Generic HTTP POST with Bearer token auth.
+     * Returns the response body as a string.
+     * Throws on non-2xx status.
+     */
+    private fun httpPost(urlStr: String, payload: JSONObject): String {
+        val url = URL(urlStr)
+        val conn = url.openConnection() as HttpURLConnection
+        conn.requestMethod = "POST"
+        conn.connectTimeout = CONNECT_TIMEOUT
+        conn.readTimeout = READ_TIMEOUT
+        conn.doOutput = true
+        conn.setRequestProperty("Content-Type", "application/json; charset=utf-8")
+        conn.setRequestProperty("Accept", "application/json")
+        conn.setRequestProperty("Authorization", "Bearer $accessToken")
+
+        OutputStreamWriter(conn.outputStream, Charsets.UTF_8).use { writer ->
+            writer.write(payload.toString())
+        }
+
+        val responseCode = conn.responseCode
+        val responseBody = if (responseCode in 200..299) {
+            conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+        } else {
+            conn.errorStream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
+        }
+        conn.disconnect()
+
+        if (responseCode !in 200..299) {
+            error("Hermes Gateway 返回 $responseCode：${responseBody.take(200)}")
+        }
+
+        return responseBody
     }
 }

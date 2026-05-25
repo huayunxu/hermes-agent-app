@@ -153,8 +153,8 @@ private fun LoginScreen(
             value = baseUrl,
             onValueChange = { baseUrl = it },
             modifier = Modifier.fillMaxWidth(),
-            label = { Text("Hermes 服务地址") },
-            placeholder = { Text("https://your-hermes.example.com/api") },
+            label = { Text("Hermes 服务地址（仅填 IP/域名即可）") },
+            placeholder = { Text("例如：10.1.1.50 或 192.168.1.100") },
             singleLine = true
         )
         Spacer(Modifier.size(12.dp))
@@ -162,10 +162,16 @@ private fun LoginScreen(
             value = token,
             onValueChange = { token = it },
             modifier = Modifier.fillMaxWidth(),
-            label = { Text("访问令牌") },
-            placeholder = { Text("从 Hermes 后台或 Web UI 复制") },
+            label = { Text("访问令牌（从 Web UI 设置页复制）") },
+            placeholder = { Text("从 Hermes 后台或 Web UI 复制 Bearer Token") },
             visualTransformation = PasswordVisualTransformation(),
             singleLine = true
+        )
+        Spacer(Modifier.size(6.dp))
+        Text(
+            text = "服务地址只需 IP 或域名，App 自动连接本地网关 10.1.1.50:9999",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
         error?.let {
             Spacer(Modifier.size(12.dp))

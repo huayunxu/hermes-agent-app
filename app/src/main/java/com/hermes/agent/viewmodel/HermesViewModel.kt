@@ -31,13 +31,18 @@ class HermesViewModel(
     fun connect(baseUrl: String, accessToken: String) {
         val cleanUrl = baseUrl.trim().removeSuffix("/")
         val cleanToken = accessToken.trim()
-        if (cleanUrl.isBlank() || cleanToken.isBlank()) {
-            mutableState.update { it.copy(error = "请填写 Hermes 服务地址和访问令牌。") }
+        if (cleanToken.isBlank()) {
+            mutableState.update { it.copy(error = "请填写访问令牌。") }
+            return
+        }
+        if (cleanUrl.isBlank()) {
+            mutableState.update { it.copy(error = "请填写 Hermes 服务地址。") }
             return
         }
 
         val session = HermesSession(baseUrl = cleanUrl, accessToken = cleanToken)
         sessionStore.save(session)
+        // baseUrl from login is stored for display; HttpHermesAgentService hardcodes gateway:9999
         agentService = HttpHermesAgentService(session)
         mutableState.update { it.copy(session = session, error = null) }
     }
