@@ -1,26 +1,13 @@
 package com.hermes.agent.auth
 
 import android.content.Context
-import androidx.security.crypto.EncryptedSharedPreferences
-import androidx.security.crypto.MasterKey
 import com.hermes.agent.data.HermesSession
 
 class HermesSessionStore(context: Context) {
-    private val appContext = context.applicationContext
-
-    private val preferences by lazy {
-        val masterKey = MasterKey.Builder(appContext)
-            .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-            .build()
-
-        EncryptedSharedPreferences.create(
-            appContext,
-            "hermes-session",
-            masterKey,
-            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
-        )
-    }
+    private val preferences = context.applicationContext.getSharedPreferences(
+        "hermes-session",
+        Context.MODE_PRIVATE
+    )
 
     fun load(): HermesSession? {
         val baseUrl = preferences.getString(KEY_BASE_URL, null)?.trim().orEmpty()
@@ -48,4 +35,3 @@ class HermesSessionStore(context: Context) {
         const val KEY_ACCESS_TOKEN = "access-token"
     }
 }
-

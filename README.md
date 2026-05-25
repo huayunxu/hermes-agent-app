@@ -38,7 +38,7 @@ The app now starts with a connection screen. Use:
 - Hermes service URL, for example `https://your-hermes.example.com/api`
 - Hermes access token, copied from your Hermes backend or Web UI admin/session tooling
 
-The token is stored with Android encrypted shared preferences.
+The token is stored in app-private Android shared preferences for the MVP. Move this to Android Keystore-backed encrypted storage before using production tokens.
 
 `HttpHermesAgentService` sends chat requests to:
 
