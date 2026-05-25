@@ -7,4 +7,10 @@ captures/
 .externalNativeBuild/
 .cxx/
 app/build/
+*.apk
+*.aab
+*.hprof
+*.log
+.DS_Store
+Thumbs.db
 
