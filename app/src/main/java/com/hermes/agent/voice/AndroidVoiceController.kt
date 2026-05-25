@@ -14,6 +14,7 @@ class AndroidVoiceController(
 ) : VoiceController {
     private var recognizer: SpeechRecognizer? = null
     private var tts: TextToSpeech? = null
+    private var logger: (String) -> Unit = { /* TODO: wire to Logcat */ }
 
     override fun startListening(onResult: (String) -> Unit, onError: (String) -> Unit) {
         if (!SpeechRecognizer.isRecognitionAvailable(context)) {
@@ -33,7 +34,19 @@ class AndroidVoiceController(
                 override fun onEvent(eventType: Int, params: Bundle?) = Unit
 
                 override fun onError(error: Int) {
-                    onError("语音识别失败，请再试一次。")
+                    val errorMsg = when (error) {
+                        SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "语音识别超时，请检查网络"
+                        SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "未检测到语音输入"
+                        SpeechRecognizer.ERROR_NO_MATCH -> "未识别到有效语音"
+                        SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "语音识别服务忙碌"
+                        SpeechRecognizer.ERROR_SERVER -> "服务端错误"
+                        SpeechRecognizer.ERROR_CLIENT -> "客户端错误"
+                        SpeechRecognizer.ERROR_AUDIO -> "音频录制失败"
+                        SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "缺少音频权限"
+                        else -> "语音识别失败，错误码: $error"
+                    }
+                    logger("SpeechRecognizer error: $error - $errorMsg")
+                    onError(errorMsg)
                 }
 
                 override fun onResults(results: Bundle?) {
@@ -74,8 +87,15 @@ class AndroidVoiceController(
 
         tts = TextToSpeech(context) { status ->
             if (status == TextToSpeech.SUCCESS) {
-                tts?.language = Locale.CHINESE
+                val lang = Locale.SIMPLIFIED_CHINESE
+                val result = tts?.setLanguage(lang)
+                if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
+                    logger("TTS 中文不支持，使用系统默认语言")
+                    tts?.language = Locale.getDefault()
+                }
                 tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "hermes-agent")
+            } else {
+                logger("TTS 初始化失败: $status")
             }
         }
     }
