@@ -58,5 +58,7 @@ data class HermesUiState(
     ),
     val isThinking: Boolean = false,
     val isListening: Boolean = false,
+    val voiceState: VoiceCallState = VoiceCallState.Idle,
+    val isSttAvailable: Boolean = true,
     val error: String? = null
 )

@@ -54,6 +54,7 @@ import com.hermes.agent.data.ApprovalRequest
 import com.hermes.agent.data.ChatMessage
 import com.hermes.agent.data.ConversationMode
 import com.hermes.agent.data.Speaker
+import com.hermes.agent.data.VoiceCallState
 import com.hermes.agent.viewmodel.HermesViewModel
 
 @Composable
@@ -112,6 +113,7 @@ fun HermesApp(viewModel: HermesViewModel) {
                 selectedModel = state.selectedModel,
                 models = state.availableModels,
                 isListening = state.isListening,
+                voiceState = state.voiceState,
                 onInput = viewModel::setInput,
                 onSend = viewModel::sendCurrentInput,
                 onModelSelect = viewModel::selectModel,
@@ -312,6 +314,7 @@ private fun Composer(
     selectedModel: String,
     models: List<String>,
     isListening: Boolean,
+    voiceState: VoiceCallState,
     onInput: (String) -> Unit,
     onSend: () -> Unit,
     onModelSelect: (String) -> Unit,
@@ -360,10 +363,32 @@ private fun Composer(
                 maxLines = 4
             )
             if (mode == ConversationMode.VoiceMessage || mode == ConversationMode.VoiceCall) {
-                IconButton(onClick = if (isListening) onStopListen else onListen) {
+                val micIcon = when {
+                    isListening -> Icons.Default.Stop
+                    voiceState == VoiceCallState.Speaking -> Icons.Default.GraphicEq
+                    voiceState == VoiceCallState.Processing -> Icons.Default.GraphicEq
+                    else -> Icons.Default.Mic
+                }
+                val micDescription = when (voiceState) {
+                    VoiceCallState.Idle -> "开始说话"
+                    VoiceCallState.Recording -> "停止录音"
+                    VoiceCallState.Processing -> "等待回复..."
+                    VoiceCallState.Speaking -> "播放中..."
+                }
+                val micColor = when (voiceState) {
+                    VoiceCallState.Recording -> Color.Red
+                    VoiceCallState.Processing -> MaterialTheme.colorScheme.tertiary
+                    VoiceCallState.Speaking -> MaterialTheme.colorScheme.primary
+                    else -> MaterialTheme.colorScheme.onSurface
+                }
+                IconButton(
+                    onClick = if (isListening) onStopListen else onListen,
+                    enabled = voiceState != VoiceCallState.Processing && voiceState != VoiceCallState.Speaking
+                ) {
                     Icon(
-                        imageVector = if (isListening) Icons.Default.Stop else Icons.Default.Mic,
-                        contentDescription = if (isListening) "停止录音" else "开始录音"
+                        imageVector = micIcon,
+                        contentDescription = micDescription,
+                        tint = micColor
                     )
                 }
             }
@@ -424,6 +449,8 @@ private fun ApprovalCard(
 
 @Composable
 private fun VideoPanel(modifier: Modifier = Modifier) {
+    var isCameraActive by remember { mutableStateOf(false) }
+
     Box(
         modifier = modifier
             .padding(horizontal = 16.dp)
@@ -432,15 +459,18 @@ private fun VideoPanel(modifier: Modifier = Modifier) {
             .background(Color.Black),
         contentAlignment = Alignment.BottomCenter
     ) {
-        VideoPreview(modifier = Modifier.fillMaxSize())
-        Button(
-            modifier = Modifier.padding(12.dp),
-            onClick = { }
-        ) {
-            Icon(Icons.Default.Videocam, contentDescription = null)
-            Spacer(Modifier.size(8.dp))
-            Text("准备连接实时视觉")
-        }
+        VideoPreview(
+            modifier = Modifier.fillMaxSize(),
+            onCameraReady = { isCameraActive = true },
+            onCameraError = { isCameraActive = false }
+        )
+        Text(
+            text = if (isCameraActive) "实时画面传输中" else "相机未启动",
+            color = Color.White,
+            modifier = Modifier
+                .padding(12.dp)
+                .align(Alignment.BottomStart)
+        )
     }
 }
 
