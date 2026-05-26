@@ -46,4 +46,11 @@ class LocalHermesAgentService : HermesAgentService {
     override suspend fun startVideoSession() {
         delay(100)
     }
+
+    override suspend fun transcribeAudio(audioData: ByteArray, sampleRate: Int): String? {
+        // Local implementation: transcription not available
+        return null
+    }
+
+    override suspend fun isAudioTranscriptionAvailable(): Boolean = false
 }

@@ -50,7 +50,17 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          gradle assembleDebug --stacktrace --console=plain 2>&1 | tee build-log.txt
+          echo "=== ENV ==="
+          echo "JAVA_HOME=$JAVA_HOME"
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          echo "GRADLE_HOME=$GRADLE_USER_HOME"
+          java -version 2>&1
+          gradle --version 2>&1
+          echo "=== PROJECT ==="
+          ls -la app/src/main/java/com/hermes/agent/
+          echo "=== BUILD ==="
+          gradle assembleDebug --stacktrace --console=plain 2>&1 | tail -200 | tee build-log.txt
+          echo "EXIT: $?"
 
       - name: Upload debug APK (artifact)
         if: always()
