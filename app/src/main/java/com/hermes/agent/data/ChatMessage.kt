@@ -29,11 +29,19 @@ data class ApprovalRequest(
 )
 
 data class HermesSession(
-    val baseUrl: String,
-    val accessToken: String
+    val lanUrl: String = "",
+    val wanUrl: String = "",
+    val selectedUrl: String = "",
+    val accessToken: String = ""
 ) {
     val displayUrl: String
-        get() = baseUrl.removeSuffix("/")
+        get() = selectedUrl.ifBlank {
+            if (lanUrl.isNotBlank()) lanUrl.removeSuffix("/")
+            else wanUrl.removeSuffix("/")
+        }.removeSuffix("/")
+
+    val baseUrl: String
+        get() = displayUrl
 }
 
 enum class ConversationMode {

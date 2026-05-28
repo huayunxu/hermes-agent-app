@@ -10,18 +10,22 @@ class HermesSessionStore(context: Context) {
     )
 
     fun load(): HermesSession? {
-        val baseUrl = preferences.getString(KEY_BASE_URL, null)?.trim().orEmpty()
+        val lanUrl = preferences.getString(KEY_LAN_URL, null)?.trim().orEmpty()
+        val wanUrl = preferences.getString(KEY_WAN_URL, null)?.trim().orEmpty()
+        val selectedUrl = preferences.getString(KEY_SELECTED_URL, null)?.trim().orEmpty()
         val token = preferences.getString(KEY_ACCESS_TOKEN, null)?.trim().orEmpty()
-        return if (baseUrl.isBlank() || token.isBlank()) {
+        return if ((lanUrl.isBlank() && wanUrl.isBlank()) || token.isBlank()) {
             null
         } else {
-            HermesSession(baseUrl = baseUrl, accessToken = token)
+            HermesSession(lanUrl = lanUrl, wanUrl = wanUrl, selectedUrl = selectedUrl, accessToken = token)
         }
     }
 
     fun save(session: HermesSession) {
         preferences.edit()
-            .putString(KEY_BASE_URL, session.baseUrl.trim())
+            .putString(KEY_LAN_URL, session.lanUrl.trim())
+            .putString(KEY_WAN_URL, session.wanUrl.trim())
+            .putString(KEY_SELECTED_URL, session.selectedUrl.trim())
             .putString(KEY_ACCESS_TOKEN, session.accessToken.trim())
             .apply()
     }
@@ -31,7 +35,9 @@ class HermesSessionStore(context: Context) {
     }
 
     private companion object {
-        const val KEY_BASE_URL = "base-url"
+        const val KEY_LAN_URL = "lan-url"
+        const val KEY_WAN_URL = "wan-url"
+        const val KEY_SELECTED_URL = "selected-url"
         const val KEY_ACCESS_TOKEN = "access-token"
     }
 }

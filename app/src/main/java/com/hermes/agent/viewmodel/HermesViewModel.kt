@@ -16,6 +16,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.net.HttpURLConnection
+import java.net.URL
 
 class HermesViewModel(
     agentService: HermesAgentService,
@@ -56,23 +60,78 @@ class HermesViewModel(
         }
     }
 
-    fun connect(baseUrl: String, accessToken: String) {
-        val cleanUrl = baseUrl.trim().removeSuffix("/")
+    fun connect(lanUrl: String, wanUrl: String, accessToken: String) {
+        val cleanLan = lanUrl.trim().removeSuffix("/")
+        val cleanWan = wanUrl.trim().removeSuffix("/")
         val cleanToken = accessToken.trim()
         if (cleanToken.isBlank()) {
             mutableState.update { it.copy(error = "请填写访问令牌。") }
             return
         }
-        if (cleanUrl.isBlank()) {
-            mutableState.update { it.copy(error = "请填写 Hermes 服务地址。") }
+        if (cleanLan.isBlank() && cleanWan.isBlank()) {
+            mutableState.update { it.copy(error = "请填写至少一个服务地址。") }
             return
         }
 
-        val session = HermesSession(baseUrl = cleanUrl, accessToken = cleanToken)
-        sessionStore.save(session)
-        // baseUrl from login is stored for display; HttpHermesAgentService hardcodes gateway:9999
-        agentService = HttpHermesAgentService(session)
-        mutableState.update { it.copy(session = session, error = null) }
+        mutableState.update { it.copy(error = null, isThinking = true) }
+        viewModelScope.launch {
+            val selectedUrl = checkReachable(cleanLan, cleanWan)
+            if (selectedUrl == null) {
+                mutableState.update {
+                    it.copy(
+                        error = "所有地址均无法连接。请检查网络或地址是否正确。",
+                        isThinking = false
+                    )
+                }
+                return@launch
+            }
+
+            val session = HermesSession(
+                lanUrl = cleanLan,
+                wanUrl = cleanWan,
+                selectedUrl = selectedUrl,
+                accessToken = cleanToken
+            )
+            sessionStore.save(session)
+            agentService = HttpHermesAgentService(session)
+            mutableState.update { it.copy(session = session, isThinking = false) }
+        }
+    }
+
+    private suspend fun checkReachable(lan: String, wan: String): String? {
+        return withContext(Dispatchers.IO) {
+            // Try LAN first with shorter timeout
+            if (lan.isNotBlank()) {
+                for (path in listOf("/api/health", "/health")) {
+                    try {
+                        val url = URL("$lan$path")
+                        val conn = url.openConnection() as HttpURLConnection
+                        conn.connectTimeout = 2000
+                        conn.readTimeout = 2000
+                        conn.requestMethod = "GET"
+                        val code = conn.responseCode
+                        conn.disconnect()
+                        if (code in 200..399) return@withContext lan
+                    } catch (_: Exception) { }
+                }
+            }
+            // Fallback to WAN with longer timeout
+            if (wan.isNotBlank()) {
+                for (path in listOf("/api/health", "/health")) {
+                    try {
+                        val url = URL("$wan$path")
+                        val conn = url.openConnection() as HttpURLConnection
+                        conn.connectTimeout = 5000
+                        conn.readTimeout = 5000
+                        conn.requestMethod = "GET"
+                        val code = conn.responseCode
+                        conn.disconnect()
+                        if (code in 200..399) return@withContext wan
+                    } catch (_: Exception) { }
+                }
+            }
+            null
+        }
     }
 
     fun disconnect() {

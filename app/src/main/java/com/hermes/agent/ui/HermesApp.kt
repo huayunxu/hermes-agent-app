@@ -65,7 +65,8 @@ fun HermesApp(viewModel: HermesViewModel) {
     if (state.session == null) {
         LoginScreen(
             error = state.error,
-            onConnect = viewModel::connect
+            isConnecting = state.isThinking,
+            onConnect = { lan, wan, token -> viewModel.connect(lan, wan, token) }
         )
         return
     }
@@ -128,9 +129,11 @@ fun HermesApp(viewModel: HermesViewModel) {
 @Composable
 private fun LoginScreen(
     error: String?,
-    onConnect: (String, String) -> Unit
+    isConnecting: Boolean,
+    onConnect: (String, String, String) -> Unit
 ) {
-    var baseUrl by rememberSaveable { mutableStateOf("") }
+    var lanUrl by rememberSaveable { mutableStateOf("") }
+    var wanUrl by rememberSaveable { mutableStateOf("") }
     var token by rememberSaveable { mutableStateOf("") }
 
     Column(
@@ -153,12 +156,23 @@ private fun LoginScreen(
         )
         Spacer(Modifier.size(24.dp))
         OutlinedTextField(
-            value = baseUrl,
-            onValueChange = { baseUrl = it },
+            value = lanUrl,
+            onValueChange = { lanUrl = it },
             modifier = Modifier.fillMaxWidth(),
-            label = { Text("Hermes 服务地址（仅填 IP/域名即可）") },
-            placeholder = { Text("例如：10.1.1.50 或 192.168.1.100") },
-            singleLine = true
+            label = { Text("内网地址（优先）") },
+            placeholder = { Text("例如：http://10.1.1.50:80") },
+            singleLine = true,
+            enabled = !isConnecting
+        )
+        Spacer(Modifier.size(8.dp))
+        OutlinedTextField(
+            value = wanUrl,
+            onValueChange = { wanUrl = it },
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("外网地址（备用）") },
+            placeholder = { Text("例如：https://your-domain.com") },
+            singleLine = true,
+            enabled = !isConnecting
         )
         Spacer(Modifier.size(12.dp))
         OutlinedTextField(
@@ -168,11 +182,12 @@ private fun LoginScreen(
             label = { Text("访问令牌（从 Web UI 设置页复制）") },
             placeholder = { Text("从 Hermes 后台或 Web UI 复制 Bearer Token") },
             visualTransformation = PasswordVisualTransformation(),
-            singleLine = true
+            singleLine = true,
+            enabled = !isConnecting
         )
         Spacer(Modifier.size(6.dp))
         Text(
-            text = "服务地址只需 IP 或域名，App 自动连接本地网关 10.1.1.50:9999",
+            text = "自动检测：优先连接内网地址，不通则自动切换到外网地址。至少填写一个。",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
@@ -180,12 +195,21 @@ private fun LoginScreen(
             Spacer(Modifier.size(12.dp))
             ErrorStrip(message = it)
         }
+        if (isConnecting) {
+            Spacer(Modifier.size(12.dp))
+            Text(
+                text = "正在检测连接...",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.primary
+            )
+        }
         Spacer(Modifier.size(18.dp))
         Button(
-            onClick = { onConnect(baseUrl, token) },
-            modifier = Modifier.fillMaxWidth()
+            onClick = { onConnect(lanUrl, wanUrl, token) },
+            modifier = Modifier.fillMaxWidth(),
+            enabled = !isConnecting
         ) {
-            Text("连接 Hermes")
+            Text(if (isConnecting) "连接中..." else "连接 Hermes")
         }
     }
 }
