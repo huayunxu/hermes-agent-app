@@ -18,8 +18,10 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
 import java.net.URL
+import org.json.JSONObject
 
 class HermesViewModel(
     agentService: HermesAgentService,
@@ -34,19 +36,15 @@ class HermesViewModel(
     val state: StateFlow<HermesUiState> = mutableState
 
     init {
-        // Check voice capabilities once at startup
         checkVoiceCapabilities()
     }
 
     private fun checkVoiceCapabilities() {
         val sttAvailable = voiceController.isSpeechRecognizerAvailable()
         mutableState.update {
-            it.copy(
-                isSttAvailable = sttAvailable
-            )
+            it.copy(isSttAvailable = sttAvailable)
         }
         if (!sttAvailable) {
-            // Pre-warn about STT unavailability in initial message
             mutableState.update {
                 it.copy(
                     messages = listOf(
@@ -60,21 +58,32 @@ class HermesViewModel(
         }
     }
 
-    fun connect(lanUrl: String, wanUrl: String, accessToken: String) {
+    /**
+     * Connect to Hermes using username + password login.
+     *
+     * Flow:
+     * 1. Check reachability (LAN preferred, WAN fallback)
+     * 2. Login via POST /api/auth/login on the web UI server to get a token
+     * 3. Save session and switch to chat view
+     */
+    fun connect(lanUrl: String, wanUrl: String, username: String, password: String) {
         val cleanLan = lanUrl.trim().removeSuffix("/")
         val cleanWan = wanUrl.trim().removeSuffix("/")
-        val cleanToken = accessToken.trim()
-        if (cleanToken.isBlank()) {
-            mutableState.update { it.copy(error = "请填写访问令牌。") }
-            return
-        }
+        val cleanUser = username.trim()
+        val cleanPass = password.trim()
+
         if (cleanLan.isBlank() && cleanWan.isBlank()) {
             mutableState.update { it.copy(error = "请填写至少一个服务地址。") }
+            return
+        }
+        if (cleanUser.isBlank() || cleanPass.isBlank()) {
+            mutableState.update { it.copy(error = "请填写用户名和密码。") }
             return
         }
 
         mutableState.update { it.copy(error = null, isThinking = true) }
         viewModelScope.launch {
+            // Step 1: Find reachable server
             val selectedUrl = checkReachable(cleanLan, cleanWan)
             if (selectedUrl == null) {
                 mutableState.update {
@@ -86,11 +95,35 @@ class HermesViewModel(
                 return@launch
             }
 
+            // Step 2: Login to get token
+            val token = try {
+                loginWithPassword(selectedUrl, cleanUser, cleanPass)
+            } catch (e: Exception) {
+                mutableState.update {
+                    it.copy(
+                        error = "登录失败：${e.message ?: "用户名或密码错误"}",
+                        isThinking = false
+                    )
+                }
+                return@launch
+            }
+
+            if (token.isNullOrBlank()) {
+                mutableState.update {
+                    it.copy(
+                        error = "登录失败：未获取到访问令牌。",
+                        isThinking = false
+                    )
+                }
+                return@launch
+            }
+
+            // Step 3: Save session
             val session = HermesSession(
                 lanUrl = cleanLan,
                 wanUrl = cleanWan,
                 selectedUrl = selectedUrl,
-                accessToken = cleanToken
+                accessToken = token
             )
             sessionStore.save(session)
             agentService = HttpHermesAgentService(session)
@@ -98,6 +131,10 @@ class HermesViewModel(
         }
     }
 
+    /**
+     * Check if LAN or WAN address is reachable.
+     * Tries /api/health and /health endpoints.
+     */
     private suspend fun checkReachable(lan: String, wan: String): String? {
         return withContext(Dispatchers.IO) {
             // Try LAN first with shorter timeout
@@ -134,6 +171,61 @@ class HermesViewModel(
         }
     }
 
+    /**
+     * Login via POST /api/auth/login to get a bearer token.
+     * This is the same endpoint the Capacitor web UI uses.
+     */
+    private suspend fun loginWithPassword(baseUrl: String, username: String, password: String): String? {
+        return withContext(Dispatchers.IO) {
+            val loginUrl = URL("$baseUrl/api/auth/login")
+            val conn = loginUrl.openConnection() as HttpURLConnection
+            conn.requestMethod = "POST"
+            conn.connectTimeout = 10_000
+            conn.readTimeout = 10_000
+            conn.doOutput = true
+            conn.setRequestProperty("Content-Type", "application/json; charset=utf-8")
+            conn.setRequestProperty("Accept", "application/json")
+
+            val payload = JSONObject()
+                .put("username", username)
+                .put("password", password)
+
+            OutputStreamWriter(conn.outputStream, Charsets.UTF_8).use { writer ->
+                writer.write(payload.toString())
+            }
+
+            val responseCode = conn.responseCode
+            val responseBody = if (responseCode in 200..299) {
+                conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+            } else {
+                val errorBody = conn.errorStream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
+                // Try to extract error message from response
+                val errorMsg = try {
+                    JSONObject(errorBody).optString("error", "")
+                } catch (e: Exception) { "" }
+                conn.disconnect()
+                if (errorMsg.isNotBlank()) {
+                    throw Exception(errorMsg)
+                } else {
+                    when (responseCode) {
+                        401 -> throw Exception("用户名或密码错误")
+                        404 -> throw Exception("服务器不支持密码登录（/api/auth/login 不存在）")
+                        else -> throw Exception("登录请求失败 (HTTP $responseCode)")
+                    }
+                }
+            }
+            conn.disconnect()
+
+            // Parse token from response
+            try {
+                val json = JSONObject(responseBody)
+                json.optString("token").takeIf { it.isNotBlank() }
+            } catch (e: Exception) {
+                null
+            }
+        }
+    }
+
     fun disconnect() {
         sessionStore.clear()
         mutableState.update { HermesUiState() }
@@ -144,10 +236,8 @@ class HermesViewModel(
     }
 
     fun switchMode(mode: ConversationMode) {
-        // Stop any ongoing voice activity when switching
         stopVoiceTurn()
 
-        // Check STT availability for VoiceCall and VoiceMessage modes
         if (mode == ConversationMode.VoiceCall || mode == ConversationMode.VoiceMessage) {
             if (!voiceController.isSpeechRecognizerAvailable()) {
                 mutableState.update {
@@ -166,10 +256,7 @@ class HermesViewModel(
             when (mode) {
                 ConversationMode.Text -> Unit
                 ConversationMode.VoiceMessage -> Unit
-                // VoiceCall and Video use stubs for session management
-                // Actual voice/video interaction happens through Composer + voiceController
                 ConversationMode.VoiceCall -> {
-                    // Add a hint message when entering VoiceCall
                     mutableState.update {
                         it.copy(
                             messages = it.messages + ChatMessage(
@@ -218,7 +305,6 @@ class HermesViewModel(
     }
 
     fun startVoiceTurn() {
-        // VoiceCall mode uses VoiceMessage's voice flow but with auto-TTS
         val speakReply = mutableState.value.mode == ConversationMode.VoiceMessage ||
                 mutableState.value.mode == ConversationMode.VoiceCall
 

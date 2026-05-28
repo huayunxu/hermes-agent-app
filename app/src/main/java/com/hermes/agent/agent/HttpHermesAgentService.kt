@@ -16,7 +16,11 @@ import org.json.JSONObject
 /**
  * Hermes Gateway API client (OpenAI-compatible /v1/chat/completions).
  *
- * Hardcoded to connect to the local Hermes Gateway at 10.1.1.50:9999.
+ * Connects to the Hermes Gateway api_server platform at the URL derived
+ * from the user's configured server address. The api_server runs on port
+ * 8642 by default. If the user enters a URL with a different port (e.g.
+ * the web UI on port 80), the client replaces the port with 8642.
+ *
  * The token field in HermesSession stores the user's personal access token
  * which is sent as the Authorization: Bearer ***
  *
@@ -28,15 +32,18 @@ class HttpHermesAgentService(
 ) : HermesAgentService {
 
     companion object {
-        // Hardcoded gateway address (local Hermes Gateway)
-        private const val GATEWAY_HOST = "http://10.1.1.50:9999"
-        private const val CHAT_ENDPOINT = "$GATEWAY_HOST/v1/chat/completions"
-        private const val AUDIO_TRANSCRIBE_ENDPOINT = "$GATEWAY_HOST/v1/audio/transcriptions"
+        /** Default api_server port */
+        const val API_SERVER_PORT = 8642
+        private const val CHAT_ENDPOINT_PATH = "/v1/chat/completions"
+        private const val AUDIO_TRANSCRIBE_ENDPOINT_PATH = "/v1/audio/transcriptions"
         private const val CONNECT_TIMEOUT = 15_000
         private const val READ_TIMEOUT = 90_000
         private const val AUDIO_UPLOAD_TIMEOUT = 60_000
     }
 
+    private val apiBaseUrl: String = deriveApiBaseUrl(session.baseUrl)
+    private val chatEndpoint = "$apiBaseUrl$CHAT_ENDPOINT_PATH"
+    private val audioTranscribeEndpoint = "$apiBaseUrl$AUDIO_TRANSCRIBE_ENDPOINT_PATH"
     private val accessToken: String = session.accessToken
     private var activeModel: String = "default"
 
@@ -63,19 +70,15 @@ class HttpHermesAgentService(
     override suspend fun isAudioTranscriptionAvailable(): Boolean {
         return withContext(Dispatchers.IO) {
             try {
-                // Send a minimal probe to check if audio endpoint exists
-                val url = URL(AUDIO_TRANSCRIBE_ENDPOINT)
+                val url = URL(audioTranscribeEndpoint)
                 val conn = url.openConnection() as HttpURLConnection
                 conn.requestMethod = "POST"
                 conn.connectTimeout = 5000
                 conn.readTimeout = 5000
                 conn.setRequestProperty("Authorization", "Bearer $accessToken")
-                // Don't send body - just check if endpoint responds
                 conn.disconnect()
                 true
             } catch (e: Exception) {
-                // If the endpoint doesn't exist, return false
-                // Check specifically for 404 or connection error
                 false
             }
         }
@@ -91,14 +94,9 @@ class HttpHermesAgentService(
         }
     }
 
-    /**
-     * Upload audio bytes to the gateway for transcription.
-     * The gateway should have a /v1/audio/transcriptions endpoint.
-     * Falls back gracefully if the endpoint is not available.
-     */
     private fun uploadAudioForTranscription(audioData: ByteArray, sampleRate: Int): String? {
         val boundary = "----HermesAudioBoundary${System.currentTimeMillis()}"
-        val url = URL(AUDIO_TRANSCRIBE_ENDPOINT)
+        val url = URL(audioTranscribeEndpoint)
         val conn = url.openConnection() as HttpURLConnection
         conn.requestMethod = "POST"
         conn.connectTimeout = AUDIO_UPLOAD_TIMEOUT
@@ -118,7 +116,6 @@ class HttpHermesAgentService(
             val responseBody = conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
             parseTranscriptionResponse(responseBody)
         } else {
-            // Endpoint not available or error
             null
         }
     }
@@ -144,9 +141,6 @@ class HttpHermesAgentService(
         }
     }
 
-    /**
-     * Send a chat request using OpenAI-compatible /v1/chat/completions format.
-     */
     private suspend fun postChat(text: String, history: List<ChatMessage>, model: String): AgentReply {
         return withContext(Dispatchers.IO) {
             val messages = buildMessages(history, text)
@@ -156,7 +150,7 @@ class HttpHermesAgentService(
                 .put("messages", messages)
                 .put("stream", false)
 
-            val body = httpPost(CHAT_ENDPOINT, payload)
+            val body = httpPost(chatEndpoint, payload)
 
             if (!body.startsWith("{")) {
                 return@withContext AgentReply(text = body)
@@ -172,7 +166,7 @@ class HttpHermesAgentService(
             val choice = choices.getJSONObject(0)
             val message = choice.optJSONObject("message")
             val content = message?.optString("content")?.takeIf { it.isNotBlank() }
-                ?: choice.optString("text", "") // fallback for non-chat formats
+                ?: choice.optString("text", "")
 
             AgentReply(
                 text = content.ifBlank { body },
@@ -182,9 +176,6 @@ class HttpHermesAgentService(
         }
     }
 
-    /**
-     * Build OpenAI-compatible messages array from conversation history + new input.
-     */
     private fun buildMessages(history: List<ChatMessage>, newText: String): JSONArray {
         val messages = JSONArray()
         history.forEach { msg ->
@@ -202,11 +193,6 @@ class HttpHermesAgentService(
         return messages
     }
 
-    /**
-     * Generic HTTP POST with Bearer token auth.
-     * Returns the response body as a string.
-     * Throws on non-2xx status.
-     */
     private fun httpPost(urlStr: String, payload: JSONObject): String {
         val url = URL(urlStr)
         val conn = url.openConnection() as HttpURLConnection
@@ -235,5 +221,31 @@ class HttpHermesAgentService(
         }
 
         return responseBody
+    }
+
+    /**
+     * Derive the API base URL from the user-provided server address.
+     *
+     * The user enters the web UI address (e.g. http://10.1.1.50:80).
+     * The api_server runs on a separate port (default 8642).
+     *
+     * Strategy:
+     * - If the URL already contains port 8642, use it as-is
+     * - Otherwise, replace the port with 8642
+     * - If no port in URL, append :8642
+     */
+    private fun deriveApiBaseUrl(baseUrl: String): String {
+        val trimmed = baseUrl.trimEnd('/')
+
+        // If already pointing at api_server port, use as-is
+        if (trimmed.contains(":$API_SERVER_PORT")) {
+            return trimmed
+        }
+
+        // Try to replace the port in the URL
+        val url = try { URL(trimmed) } catch (e: Exception) { return "$trimmed:$API_SERVER_PORT" }
+
+        val newPort = API_SERVER_PORT
+        return "${url.protocol}://${url.host}:$newPort"
     }
 }

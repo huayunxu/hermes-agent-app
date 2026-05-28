@@ -66,7 +66,7 @@ fun HermesApp(viewModel: HermesViewModel) {
         LoginScreen(
             error = state.error,
             isConnecting = state.isThinking,
-            onConnect = { lan, wan, token -> viewModel.connect(lan, wan, token) }
+            onConnect = { lan, wan, user, pass -> viewModel.connect(lan, wan, user, pass) }
         )
         return
     }
@@ -130,11 +130,12 @@ fun HermesApp(viewModel: HermesViewModel) {
 private fun LoginScreen(
     error: String?,
     isConnecting: Boolean,
-    onConnect: (String, String, String) -> Unit
+    onConnect: (String, String, String, String) -> Unit
 ) {
     var lanUrl by rememberSaveable { mutableStateOf("") }
     var wanUrl by rememberSaveable { mutableStateOf("") }
-    var token by rememberSaveable { mutableStateOf("") }
+    var username by rememberSaveable { mutableStateOf("") }
+    var password by rememberSaveable { mutableStateOf("") }
 
     Column(
         modifier = Modifier
@@ -176,18 +177,28 @@ private fun LoginScreen(
         )
         Spacer(Modifier.size(12.dp))
         OutlinedTextField(
-            value = token,
-            onValueChange = { token = it },
+            value = username,
+            onValueChange = { username = it },
             modifier = Modifier.fillMaxWidth(),
-            label = { Text("访问令牌（从 Web UI 设置页复制）") },
-            placeholder = { Text("从 Hermes 后台或 Web UI 复制 Bearer Token") },
+            label = { Text("用户名") },
+            placeholder = { Text("登录 Hermes Web UI 的用户名") },
+            singleLine = true,
+            enabled = !isConnecting
+        )
+        Spacer(Modifier.size(8.dp))
+        OutlinedTextField(
+            value = password,
+            onValueChange = { password = it },
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("密码") },
+            placeholder = { Text("登录 Hermes Web UI 的密码") },
             visualTransformation = PasswordVisualTransformation(),
             singleLine = true,
             enabled = !isConnecting
         )
         Spacer(Modifier.size(6.dp))
         Text(
-            text = "自动检测：优先连接内网地址，不通则自动切换到外网地址。至少填写一个。",
+            text = "自动检测：优先连接内网地址，不通则自动切换到外网地址。至少填写一个地址。",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
@@ -198,18 +209,18 @@ private fun LoginScreen(
         if (isConnecting) {
             Spacer(Modifier.size(12.dp))
             Text(
-                text = "正在检测连接...",
+                text = "正在登录...",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.primary
             )
         }
         Spacer(Modifier.size(18.dp))
         Button(
-            onClick = { onConnect(lanUrl, wanUrl, token) },
+            onClick = { onConnect(lanUrl, wanUrl, username, password) },
             modifier = Modifier.fillMaxWidth(),
             enabled = !isConnecting
         ) {
-            Text(if (isConnecting) "连接中..." else "连接 Hermes")
+            Text(if (isConnecting) "连接中..." else "登录 Hermes")
         }
     }
 }
