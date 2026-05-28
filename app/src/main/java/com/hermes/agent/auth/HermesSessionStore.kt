@@ -14,10 +14,11 @@ class HermesSessionStore(context: Context) {
         val wanUrl = preferences.getString(KEY_WAN_URL, null)?.trim().orEmpty()
         val selectedUrl = preferences.getString(KEY_SELECTED_URL, null)?.trim().orEmpty()
         val token = preferences.getString(KEY_ACCESS_TOKEN, null)?.trim().orEmpty()
-        return if ((lanUrl.isBlank() && wanUrl.isBlank()) || token.isBlank()) {
+        val apiKey = preferences.getString(KEY_API_KEY, null)?.trim().orEmpty()
+        return if ((lanUrl.isBlank() && wanUrl.isBlank()) || (token.isBlank() && apiKey.isBlank())) {
             null
         } else {
-            HermesSession(lanUrl = lanUrl, wanUrl = wanUrl, selectedUrl = selectedUrl, accessToken = token)
+            HermesSession(lanUrl = lanUrl, wanUrl = wanUrl, selectedUrl = selectedUrl, accessToken = token, apiKey = apiKey)
         }
     }
 
@@ -27,6 +28,7 @@ class HermesSessionStore(context: Context) {
             .putString(KEY_WAN_URL, session.wanUrl.trim())
             .putString(KEY_SELECTED_URL, session.selectedUrl.trim())
             .putString(KEY_ACCESS_TOKEN, session.accessToken.trim())
+            .putString(KEY_API_KEY, session.apiKey.trim())
             .apply()
     }
 
@@ -39,5 +41,6 @@ class HermesSessionStore(context: Context) {
         const val KEY_WAN_URL = "wan-url"
         const val KEY_SELECTED_URL = "selected-url"
         const val KEY_ACCESS_TOKEN = "access-token"
+        const val KEY_API_KEY = "api-key"
     }
 }

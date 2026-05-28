@@ -66,11 +66,12 @@ class HermesViewModel(
      * 2. Login via POST /api/auth/login on the web UI server to get a token
      * 3. Save session and switch to chat view
      */
-    fun connect(lanUrl: String, wanUrl: String, username: String, password: String) {
+    fun connect(lanUrl: String, wanUrl: String, username: String, password: String, apiKey: String = "") {
         val cleanLan = lanUrl.trim().removeSuffix("/")
         val cleanWan = wanUrl.trim().removeSuffix("/")
         val cleanUser = username.trim()
         val cleanPass = password.trim()
+        val cleanApiKey = apiKey.trim()
 
         if (cleanLan.isBlank() && cleanWan.isBlank()) {
             mutableState.update { it.copy(error = "请填写至少一个服务地址。") }
@@ -123,7 +124,8 @@ class HermesViewModel(
                 lanUrl = cleanLan,
                 wanUrl = cleanWan,
                 selectedUrl = selectedUrl,
-                accessToken = token
+                accessToken = token,
+                apiKey = cleanApiKey
             )
             sessionStore.save(session)
             agentService = HttpHermesAgentService(session)

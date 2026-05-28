@@ -66,7 +66,7 @@ fun HermesApp(viewModel: HermesViewModel) {
         LoginScreen(
             error = state.error,
             isConnecting = state.isThinking,
-            onConnect = { lan, wan, user, pass -> viewModel.connect(lan, wan, user, pass) }
+            onConnect = { lan, wan, user, pass, apiKey -> viewModel.connect(lan, wan, user, pass, apiKey) }
         )
         return
     }
@@ -130,12 +130,13 @@ fun HermesApp(viewModel: HermesViewModel) {
 private fun LoginScreen(
     error: String?,
     isConnecting: Boolean,
-    onConnect: (String, String, String, String) -> Unit
+    onConnect: (String, String, String, String, String) -> Unit
 ) {
     var lanUrl by rememberSaveable { mutableStateOf("") }
     var wanUrl by rememberSaveable { mutableStateOf("") }
     var username by rememberSaveable { mutableStateOf("") }
     var password by rememberSaveable { mutableStateOf("") }
+    var apiKey by rememberSaveable { mutableStateOf("") }
 
     Column(
         modifier = Modifier
@@ -196,6 +197,16 @@ private fun LoginScreen(
             singleLine = true,
             enabled = !isConnecting
         )
+        Spacer(Modifier.size(8.dp))
+        OutlinedTextField(
+            value = apiKey,
+            onValueChange = { apiKey = it },
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("API Key（可选）") },
+            placeholder = { Text("用于调用 AI 模型，留空则使用登录 token") },
+            singleLine = true,
+            enabled = !isConnecting
+        )
         Spacer(Modifier.size(6.dp))
         Text(
             text = "自动检测：优先连接内网地址，不通则自动切换到外网地址。至少填写一个地址。",
@@ -216,7 +227,7 @@ private fun LoginScreen(
         }
         Spacer(Modifier.size(18.dp))
         Button(
-            onClick = { onConnect(lanUrl, wanUrl, username, password) },
+            onClick = { onConnect(lanUrl, wanUrl, username, password, apiKey) },
             modifier = Modifier.fillMaxWidth(),
             enabled = !isConnecting
         ) {

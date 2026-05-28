@@ -32,7 +32,8 @@ data class HermesSession(
     val lanUrl: String = "",
     val wanUrl: String = "",
     val selectedUrl: String = "",
-    val accessToken: String = ""
+    val accessToken: String = "",
+    val apiKey: String = ""
 ) {
     val displayUrl: String
         get() = selectedUrl.ifBlank {

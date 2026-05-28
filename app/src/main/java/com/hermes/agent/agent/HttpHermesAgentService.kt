@@ -44,7 +44,8 @@ class HttpHermesAgentService(
     private val apiBaseUrl: String = deriveApiBaseUrl(session.baseUrl)
     private val chatEndpoint = "$apiBaseUrl$CHAT_ENDPOINT_PATH"
     private val audioTranscribeEndpoint = "$apiBaseUrl$AUDIO_TRANSCRIBE_ENDPOINT_PATH"
-    private val accessToken: String = session.accessToken
+    /** Use apiKey for API Server auth; fall back to accessToken for backward compat */
+    private val accessToken: String = session.apiKey.ifBlank { session.accessToken }
     private var activeModel: String = "default"
 
     override suspend fun sendText(history: List<ChatMessage>, text: String, model: String): AgentReply {
