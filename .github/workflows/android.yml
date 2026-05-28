@@ -76,7 +76,7 @@ jobs:
             ## Hermes Agent Android - Build #${{ github.run_number }}
 
             - Commit: ${{ github.sha }}
-            - Author: ${{ github.event.head_commit.author.name || 'Auto build' }}
+            - Author: Yvan Hu
 
             ### Changes
             ${{ github.event.head_commit.message || 'Auto build' }}
