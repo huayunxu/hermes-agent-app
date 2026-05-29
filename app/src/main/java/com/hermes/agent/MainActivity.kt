@@ -5,7 +5,6 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
 import com.hermes.agent.agent.LocalHermesAgentService
 import com.hermes.agent.auth.HermesSessionStore
@@ -40,9 +39,6 @@ class MainActivity : ComponentActivity() {
             }
             val sessionStore = remember {
                 HermesSessionStore(applicationContext)
-            }
-            DisposableEffect(voiceController) {
-                onDispose { voiceController.shutdown() }
             }
             val viewModel = remember {
                 HermesViewModel(

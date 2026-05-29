@@ -202,14 +202,14 @@ private fun LoginScreen(
             value = apiKey,
             onValueChange = { apiKey = it },
             modifier = Modifier.fillMaxWidth(),
-            label = { Text("API Key（可选）") },
-            placeholder = { Text("用于调用 AI 模型，留空则使用登录 token") },
+            label = { Text("API Key（推荐）") },
+            placeholder = { Text("Hermes API_SERVER_KEY；留空则经 Web UI 代理") },
             singleLine = true,
             enabled = !isConnecting
         )
         Spacer(Modifier.size(6.dp))
         Text(
-            text = "自动检测：优先连接内网地址，不通则自动切换到外网地址。至少填写一个地址。",
+            text = "自动检测内网/外网地址。API Key 来自服务器 ~/.hermes 的 API_SERVER_KEY；不填则通过 Web UI 代理访问 Gateway。",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )

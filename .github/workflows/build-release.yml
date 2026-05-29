@@ -4,9 +4,14 @@ on:
   push:
     branches:
       - main
+      - develop
     tags:
       - 'v*'
   workflow_dispatch:
+
+# Required for softprops/action-gh-release (create release + upload APK).
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -27,7 +32,7 @@ jobs:
         run: chmod +x gradlew
 
       - name: Build APK
-        run: ./gradlew assembleDebug
+        run: ./gradlew assembleDebug --stacktrace
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
@@ -39,6 +44,8 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
 
     steps:
       - name: Download APK

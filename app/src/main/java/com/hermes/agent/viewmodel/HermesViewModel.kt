@@ -4,14 +4,15 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.hermes.agent.agent.HttpHermesAgentService
 import com.hermes.agent.agent.HermesAgentService
+import com.hermes.agent.agent.LocalHermesAgentService
 import com.hermes.agent.auth.HermesSessionStore
 import com.hermes.agent.data.ChatMessage
 import com.hermes.agent.data.ConversationMode
 import com.hermes.agent.data.HermesSession
 import com.hermes.agent.data.HermesUiState
 import com.hermes.agent.data.Speaker
-import com.hermes.agent.voice.VoiceController
 import com.hermes.agent.data.VoiceCallState
+import com.hermes.agent.voice.VoiceController
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
@@ -41,16 +42,28 @@ class HermesViewModel(
 
     private fun checkVoiceCapabilities() {
         val sttAvailable = voiceController.isSpeechRecognizerAvailable()
+        val voiceAvailable = voiceController.isVoiceInputAvailable()
         mutableState.update {
             it.copy(isSttAvailable = sttAvailable)
         }
-        if (!sttAvailable) {
+        if (!voiceAvailable) {
             mutableState.update {
                 it.copy(
                     messages = listOf(
                         ChatMessage(
                             speaker = Speaker.Assistant,
-                            text = "你好，我是 Hermes Agent。你的设备不支持本地语音识别，语音通话将录制音频并发送。如需语音交互，请使用语音消息模式或文字输入。"
+                            text = "你好，我是 Hermes Agent。当前设备不支持语音输入，请使用文字模式。"
+                        )
+                    )
+                )
+            }
+        } else if (!sttAvailable) {
+            mutableState.update {
+                it.copy(
+                    messages = listOf(
+                        ChatMessage(
+                            speaker = Speaker.Assistant,
+                            text = "你好，我是 Hermes Agent。本机无系统语音识别时将录音并发送到 Hermes Gateway 转写（需服务端开启 /v1/audio/transcriptions）。"
                         )
                     )
                 )
@@ -58,14 +71,6 @@ class HermesViewModel(
         }
     }
 
-    /**
-     * Connect to Hermes using username + password login.
-     *
-     * Flow:
-     * 1. Check reachability (LAN preferred, WAN fallback)
-     * 2. Login via POST /api/auth/login on the web UI server to get a token
-     * 3. Save session and switch to chat view
-     */
     fun connect(lanUrl: String, wanUrl: String, username: String, password: String, apiKey: String = "") {
         val cleanLan = lanUrl.trim().removeSuffix("/")
         val cleanWan = wanUrl.trim().removeSuffix("/")
@@ -84,7 +89,6 @@ class HermesViewModel(
 
         mutableState.update { it.copy(error = null, isThinking = true) }
         viewModelScope.launch {
-            // Step 1: Find reachable server
             val selectedUrl = checkReachable(cleanLan, cleanWan)
             if (selectedUrl == null) {
                 mutableState.update {
@@ -96,7 +100,6 @@ class HermesViewModel(
                 return@launch
             }
 
-            // Step 2: Login to get token
             val token = try {
                 loginWithPassword(selectedUrl, cleanUser, cleanPass)
             } catch (e: Exception) {
@@ -119,7 +122,6 @@ class HermesViewModel(
                 return@launch
             }
 
-            // Step 3: Save session
             val session = HermesSession(
                 lanUrl = cleanLan,
                 wanUrl = cleanWan,
@@ -133,13 +135,8 @@ class HermesViewModel(
         }
     }
 
-    /**
-     * Check if LAN or WAN address is reachable.
-     * Tries /api/health and /health endpoints.
-     */
     private suspend fun checkReachable(lan: String, wan: String): String? {
         return withContext(Dispatchers.IO) {
-            // Try LAN first with shorter timeout
             if (lan.isNotBlank()) {
                 for (path in listOf("/api/health", "/health")) {
                     try {
@@ -150,11 +147,10 @@ class HermesViewModel(
                         conn.requestMethod = "GET"
                         val code = conn.responseCode
                         conn.disconnect()
-                        if (code in 200..399) return@withContext lan
+                        if (code in 200..299) return@withContext lan
                     } catch (_: Exception) { }
                 }
             }
-            // Fallback to WAN with longer timeout
             if (wan.isNotBlank()) {
                 for (path in listOf("/api/health", "/health")) {
                     try {
@@ -165,7 +161,7 @@ class HermesViewModel(
                         conn.requestMethod = "GET"
                         val code = conn.responseCode
                         conn.disconnect()
-                        if (code in 200..399) return@withContext wan
+                        if (code in 200..299) return@withContext wan
                     } catch (_: Exception) { }
                 }
             }
@@ -173,10 +169,6 @@ class HermesViewModel(
         }
     }
 
-    /**
-     * Login via POST /api/auth/login to get a bearer token.
-     * This is the same endpoint the Capacitor web UI uses.
-     */
     private suspend fun loginWithPassword(baseUrl: String, username: String, password: String): String? {
         return withContext(Dispatchers.IO) {
             val loginUrl = URL("$baseUrl/api/auth/login")
@@ -201,10 +193,11 @@ class HermesViewModel(
                 conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
             } else {
                 val errorBody = conn.errorStream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
-                // Try to extract error message from response
                 val errorMsg = try {
                     JSONObject(errorBody).optString("error", "")
-                } catch (e: Exception) { "" }
+                } catch (_: Exception) {
+                    ""
+                }
                 conn.disconnect()
                 if (errorMsg.isNotBlank()) {
                     throw Exception(errorMsg)
@@ -218,11 +211,12 @@ class HermesViewModel(
             }
             conn.disconnect()
 
-            // Parse token from response
             try {
                 val json = JSONObject(responseBody)
                 json.optString("token").takeIf { it.isNotBlank() }
-            } catch (e: Exception) {
+                    ?: json.optString("access_token").takeIf { it.isNotBlank() }
+                    ?: json.optString("accessToken").takeIf { it.isNotBlank() }
+            } catch (_: Exception) {
                 null
             }
         }
@@ -230,6 +224,9 @@ class HermesViewModel(
 
     fun disconnect() {
         sessionStore.clear()
+        agentService = LocalHermesAgentService()
+        voiceController.stopListening()
+        voiceController.stopSpeaking()
         mutableState.update { HermesUiState() }
     }
 
@@ -241,11 +238,11 @@ class HermesViewModel(
         stopVoiceTurn()
 
         if (mode == ConversationMode.VoiceCall || mode == ConversationMode.VoiceMessage) {
-            if (!voiceController.isSpeechRecognizerAvailable()) {
+            if (!voiceController.isVoiceInputAvailable()) {
                 mutableState.update {
                     it.copy(
                         mode = mode,
-                        error = "当前设备不支持系统语音识别。语音消息功能需要 Google 语音服务。"
+                        error = "当前设备不支持语音输入。"
                     )
                 }
                 return
@@ -256,8 +253,7 @@ class HermesViewModel(
 
         viewModelScope.launch {
             when (mode) {
-                ConversationMode.Text -> Unit
-                ConversationMode.VoiceMessage -> Unit
+                ConversationMode.Text, ConversationMode.VoiceMessage -> Unit
                 ConversationMode.VoiceCall -> {
                     mutableState.update {
                         it.copy(
@@ -273,7 +269,7 @@ class HermesViewModel(
                         it.copy(
                             messages = it.messages + ChatMessage(
                                 speaker = Speaker.System,
-                                text = "视频模式：摄像头画面实时传给 Hermes。输入文字描述你想让它注意的内容。"
+                                text = "视频模式：摄像头预览已开启。画面上传至 Hermes 的实时能力仍在开发中，可先通过文字描述你想让它关注的内容。"
                             )
                         )
                     }
@@ -300,6 +296,7 @@ class HermesViewModel(
     }
 
     fun sendCurrentInput() {
+        if (mutableState.value.isThinking) return
         val text = mutableState.value.input.trim()
         if (text.isBlank()) return
         if (handleSlashCommand(text)) return
@@ -307,15 +304,17 @@ class HermesViewModel(
     }
 
     fun startVoiceTurn() {
-        val speakReply = mutableState.value.mode == ConversationMode.VoiceMessage ||
-                mutableState.value.mode == ConversationMode.VoiceCall
+        if (mutableState.value.isThinking) return
 
-        if (!voiceController.isSpeechRecognizerAvailable()) {
+        val speakReply = mutableState.value.mode == ConversationMode.VoiceMessage ||
+            mutableState.value.mode == ConversationMode.VoiceCall
+
+        if (!voiceController.isVoiceInputAvailable()) {
             mutableState.update {
                 it.copy(
                     isListening = false,
                     voiceState = VoiceCallState.Idle,
-                    error = "当前设备不支持系统语音识别"
+                    error = "当前设备不支持语音输入"
                 )
             }
             return
@@ -324,11 +323,21 @@ class HermesViewModel(
         mutableState.update { it.copy(isListening = true, voiceState = VoiceCallState.Recording, error = null) }
         voiceController.startListening(
             onResult = { transcript ->
-                mutableState.update { it.copy(isListening = false, voiceState = VoiceCallState.Processing, input = transcript) }
+                mutableState.update {
+                    it.copy(isListening = false, voiceState = VoiceCallState.Processing, input = transcript)
+                }
                 sendText(transcript, speakReply = speakReply)
             },
             onError = { message ->
-                mutableState.update { it.copy(isListening = false, voiceState = VoiceCallState.Idle, error = message) }
+                mutableState.update {
+                    it.copy(isListening = false, voiceState = VoiceCallState.Idle, error = message)
+                }
+            },
+            onRawAudio = { wavBytes ->
+                mutableState.update {
+                    it.copy(isListening = false, voiceState = VoiceCallState.Processing)
+                }
+                transcribeAndSend(wavBytes, speakReply)
             }
         )
     }
@@ -337,6 +346,25 @@ class HermesViewModel(
         voiceController.stopListening()
         voiceController.stopSpeaking()
         mutableState.update { it.copy(isListening = false, voiceState = VoiceCallState.Idle) }
+    }
+
+    private fun transcribeAndSend(wavBytes: ByteArray, speakReply: Boolean) {
+        viewModelScope.launch {
+            val transcript = runCatching {
+                agentService.transcribeAudio(wavBytes, sampleRate = 16_000)
+            }.getOrNull()
+
+            if (transcript.isNullOrBlank()) {
+                mutableState.update {
+                    it.copy(
+                        voiceState = VoiceCallState.Idle,
+                        error = "语音转写失败。请确认 Hermes Gateway 已开启 /v1/audio/transcriptions，或填写 API Key。"
+                    )
+                }
+                return@launch
+            }
+            sendText(transcript, speakReply = speakReply)
+        }
     }
 
     fun decideApproval(approved: Boolean) {
@@ -418,7 +446,11 @@ class HermesViewModel(
     }
 
     private fun sendText(text: String, speakReply: Boolean) {
+        if (mutableState.value.isThinking) return
+
         val userMessage = ChatMessage(speaker = Speaker.User, text = text)
+        val historyForApi = mutableState.value.messages
+
         mutableState.update {
             it.copy(
                 input = "",
@@ -432,7 +464,7 @@ class HermesViewModel(
         viewModelScope.launch {
             runCatching {
                 agentService.sendText(
-                    history = mutableState.value.messages,
+                    history = historyForApi,
                     text = text,
                     model = mutableState.value.selectedModel
                 )
@@ -444,13 +476,17 @@ class HermesViewModel(
                 mutableState.update {
                     it.copy(
                         isThinking = false,
-                        voiceState = if (speakReply && reply.shouldSpeak) VoiceCallState.Speaking else VoiceCallState.Idle,
                         pendingApproval = reply.approvalRequest,
                         messages = it.messages + assistantMessage
                     )
                 }
                 if (speakReply && reply.shouldSpeak) {
-                    voiceController.speak(reply.text)
+                    mutableState.update { it.copy(voiceState = VoiceCallState.Speaking) }
+                    voiceController.speak(reply.text) {
+                        mutableState.update { it.copy(voiceState = VoiceCallState.Idle) }
+                    }
+                } else {
+                    mutableState.update { it.copy(voiceState = VoiceCallState.Idle) }
                 }
             }.onFailure { throwable ->
                 mutableState.update {

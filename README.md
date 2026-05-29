@@ -31,56 +31,30 @@ app/src/main/java/com/hermes/agent/
   voice/                  Speech recognition and TTS controller
 ```
 
-## Connect A Real Hermes Backend
+## Connect Hermes Agent / Web UI
 
-The app now starts with a connection screen. Use:
+The login screen matches **Hermes Web UI** (`POST /api/auth/login` → `{ "token": "..." }`):
 
-- Hermes service URL, for example `https://your-hermes.example.com/api`
-- Hermes access token, copied from your Hermes backend or Web UI admin/session tooling
+| Field | Purpose |
+|-------|---------|
+| LAN / WAN URL | Web UI base URL (e.g. `http://10.1.1.50:80`) |
+| Username / Password | Same as Web UI login |
+| API Key (optional) | `API_SERVER_KEY` from `~/.hermes/.env` on the server |
 
-The token is stored in app-private Android shared preferences for the MVP. Move this to Android Keystore-backed encrypted storage before using production tokens.
+**Chat routing** (`HttpHermesAgentService`):
 
-`HttpHermesAgentService` sends chat requests to:
+1. **API Key provided** → direct Gateway `POST http://{host}:8642/v1/chat/completions` with `Authorization: Bearer {API_SERVER_KEY}`.
+2. **API Key empty** → Web UI proxy `POST {webUi}/api/hermes/v1/chat/completions` with login JWT; the server injects `API_SERVER_KEY` when forwarding (same as the browser).
 
-```text
-POST {baseUrl}/chat-run
-Authorization: Bearer {accessToken}
-```
+OpenAI-style body: `{ "model", "messages", "stream": false }`.
 
-The payload includes `text`, `message`, `model`, and OpenAI-style `messages`.
-Approval decisions are sent to:
+**Voice**: device STT when available; otherwise raw WAV upload to `/v1/audio/transcriptions` on the same route (direct or proxied).
 
-```text
-POST {baseUrl}/approval
-Authorization: Bearer {accessToken}
-```
+**Tool approvals** on Web UI use Socket.IO (`approval.requested` / `approval.respond`), not HTTP. The Android app can display approval cards if the Gateway returns an `approval` object in JSON; full realtime approval needs a future Socket.IO client.
 
-The app understands approval responses shaped like:
+Credentials are stored in app-private SharedPreferences for the MVP. Use Android Keystore before production.
 
-```json
-{
-  "text": "This action requires approval.",
-  "approval": {
-    "id": "approval-id",
-    "title": "Approve tool call",
-    "description": "Hermes wants to run an external operation."
-  }
-}
-```
-
-If your Hermes endpoint uses a different path or payload, update only `HttpHermesAgentService`.
-
-Keep the UI and `HermesViewModel` unchanged by preserving:
-
-```kotlin
-interface HermesAgentService {
-    suspend fun sendText(history: List<ChatMessage>, text: String): AgentReply
-    suspend fun startVoiceSession()
-    suspend fun startVideoSession()
-}
-```
-
-For realtime voice/video, use a WebRTC or WebSocket session owned by the service layer, then surface transcripts and assistant events back into `HermesViewModel`.
+Keep the UI and `HermesViewModel` unchanged by preserving `HermesAgentService`.
 
 ## Build
 

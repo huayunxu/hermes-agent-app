@@ -14,6 +14,7 @@ import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -41,7 +42,7 @@ class AndroidVoiceController(
 
     private var pendingOnResult: ((String) -> Unit)? = null
     private var pendingOnError: ((String) -> Unit)? = null
-    private var pendingRawResult: ((ByteArray) -> Unit)? = null
+    private var pendingOnRawAudio: ((ByteArray) -> Unit)? = null
 
     private val tag = "AndroidVoiceController"
 
@@ -66,14 +67,30 @@ class AndroidVoiceController(
         return SpeechRecognizer.isRecognitionAvailable(context)
     }
 
-    override fun startListening(onResult: (String) -> Unit, onError: (String) -> Unit) {
-        // Store callbacks for use in raw recording fallback
+    override fun isVoiceInputAvailable(): Boolean {
+        if (SpeechRecognizer.isRecognitionAvailable(context)) return true
+        val bufferSize = AudioRecord.getMinBufferSize(
+            SAMPLE_RATE, CHANNEL_CONFIG, AUDIO_FORMAT
+        )
+        return bufferSize > 0
+    }
+
+    override fun startListening(
+        onResult: (String) -> Unit,
+        onError: (String) -> Unit,
+        onRawAudio: ((ByteArray) -> Unit)?
+    ) {
         pendingOnResult = onResult
         pendingOnError = onError
+        pendingOnRawAudio = onRawAudio
 
         if (!SpeechRecognizer.isRecognitionAvailable(context)) {
             Log.w(tag, "SpeechRecognizer not available, switching to raw audio recording")
-            startRawRecording(onResult, onError)
+            if (onRawAudio == null) {
+                onError("当前设备不支持语音识别，且未配置服务端转写。")
+                return
+            }
+            startRawRecording(onError)
             return
         }
 
@@ -119,7 +136,11 @@ class AndroidVoiceController(
                         )
                     ) {
                         Log.w(tag, "Network error, falling back to raw audio recording")
-                        startRawRecording(pendingOnResult!!, pendingOnError!!)
+                        if (pendingOnRawAudio != null) {
+                            startRawRecording(pendingOnError!!)
+                        } else {
+                            pendingOnError?.invoke(errorMsg)
+                        }
                     } else {
                         pendingOnError?.invoke(errorMsg)
                     }
@@ -157,7 +178,7 @@ class AndroidVoiceController(
      * Returns a WAV header-prefixed PCM byte array via the onResult callback.
      * The caller should upload this to the gateway for server-side transcription.
      */
-    private fun startRawRecording(onResult: (String) -> Unit, onError: (String) -> Unit) {
+    private fun startRawRecording(onError: (String) -> Unit) {
         val scope = CoroutineScope(Dispatchers.IO)
         currentScope = scope
 
@@ -212,10 +233,12 @@ class AndroidVoiceController(
                     val wavBytes = addWavHeader(pcmBytes, SAMPLE_RATE, 1, 16)
 
                     Log.d(tag, "Raw recording complete: ${wavBytes.size} bytes")
-                    // Return the audio data - caller should upload to gateway
-                    // For now, provide a placeholder that indicates audio was captured
-                    pendingRawResult?.invoke(wavBytes)
-                    onResult("[AUDIO:${wavBytes.size}]") // Placeholder - gateway should transcribe
+                    val rawHandler = pendingOnRawAudio
+                    if (rawHandler != null) {
+                        rawHandler(wavBytes)
+                    } else {
+                        onError("录音完成，但未配置服务端语音转写。")
+                    }
                 } catch (e: Exception) {
                     Log.e(tag, "Recording error: ${e.message}")
                     audioRecord?.stop()
@@ -234,9 +257,14 @@ class AndroidVoiceController(
     private fun stopRawRecording() {
         recordingJob?.cancel()
         recordingJob = null
-        audioRecord?.stop()
+        try {
+            if (audioRecord?.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
+                audioRecord?.stop()
+            }
+        } catch (_: Exception) { }
         audioRecord?.release()
         audioRecord = null
+        currentScope?.cancel()
         currentScope = null
     }
 
@@ -252,11 +280,22 @@ class AndroidVoiceController(
         stopRawRecording()
     }
 
-    override fun speak(text: String) {
+    override fun speak(text: String, onDone: (() -> Unit)?) {
         if (!ttsInitialized) {
             Log.w(tag, "TTS not initialized, skipping speak")
+            onDone?.invoke()
             return
         }
+        tts?.setOnUtteranceProgressListener(object : android.speech.tts.UtteranceProgressListener() {
+            override fun onStart(utteranceId: String?) = Unit
+            override fun onDone(utteranceId: String?) {
+                if (utteranceId == "hermes-agent") onDone?.invoke()
+            }
+            @Deprecated("Deprecated in Java")
+            override fun onError(utteranceId: String?) {
+                onDone?.invoke()
+            }
+        })
         tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "hermes-agent")
     }
 

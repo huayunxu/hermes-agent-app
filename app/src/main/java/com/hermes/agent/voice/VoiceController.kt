@@ -1,34 +1,27 @@
 package com.hermes.agent.voice
 
 interface VoiceController {
-    /**
-     * Check if Android SpeechRecognizer is available on this device.
-     */
+    /** Android SpeechRecognizer (on-device STT). */
     fun isSpeechRecognizerAvailable(): Boolean
 
-    /**
-     * Start listening for speech using Android SpeechRecognizer.
-     * Falls back to AudioRecord if SpeechRecognizer is not available.
-     */
-    fun startListening(onResult: (String) -> Unit, onError: (String) -> Unit)
+    /** SpeechRecognizer or raw microphone recording for server-side transcription. */
+    fun isVoiceInputAvailable(): Boolean
 
     /**
-     * Stop active speech recognition.
+     * Start listening. [onResult] receives transcribed text from device STT.
+     * [onRawAudio] receives WAV bytes when falling back to AudioRecord (upload via Gateway).
      */
+    fun startListening(
+        onResult: (String) -> Unit,
+        onError: (String) -> Unit,
+        onRawAudio: ((ByteArray) -> Unit)? = null
+    )
+
     fun stopListening()
 
-    /**
-     * Play text as speech via TTS.
-     */
-    fun speak(text: String)
+    fun speak(text: String, onDone: (() -> Unit)? = null)
 
-    /**
-     * Stop TTS playback.
-     */
     fun stopSpeaking()
 
-    /**
-     * Release all resources.
-     */
     fun shutdown()
 }

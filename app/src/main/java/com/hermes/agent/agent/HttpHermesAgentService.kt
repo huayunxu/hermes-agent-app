@@ -14,39 +14,50 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /**
- * Hermes Gateway API client (OpenAI-compatible /v1/chat/completions).
+ * Hermes Agent HTTP client aligned with Hermes Web UI + Gateway (api_server).
  *
- * Connects to the Hermes Gateway api_server platform at the URL derived
- * from the user's configured server address. The api_server runs on port
- * 8642 by default. If the user enters a URL with a different port (e.g.
- * the web UI on port 80), the client replaces the port with 8642.
+ * Routing (matches [Hermes Web UI proxy](packages/server proxy-handler)):
+ * - **API Key set** → direct Gateway at port [API_SERVER_PORT] with `API_SERVER_KEY`.
+ * - **API Key empty** → Web UI proxy `{webUi}/api/hermes/v1/...` with login JWT;
+ *   the server injects `API_SERVER_KEY` when forwarding to Gateway.
  *
- * The token field in HermesSession stores the user's personal access token
- * which is sent as the Authorization: Bearer ***
- *
- * Message format: OpenAI-compatible {model, messages, stream:false}
- * Response: {choices:[{message:{content}}]}
+ * Chat: OpenAI-compatible `POST /v1/chat/completions` with `{ model, messages, stream: false }`.
  */
 class HttpHermesAgentService(
     session: HermesSession
 ) : HermesAgentService {
 
     companion object {
-        /** Default api_server port */
         const val API_SERVER_PORT = 8642
-        private const val CHAT_ENDPOINT_PATH = "/v1/chat/completions"
-        private const val AUDIO_TRANSCRIBE_ENDPOINT_PATH = "/v1/audio/transcriptions"
+        private const val CHAT_PATH = "/v1/chat/completions"
+        private const val AUDIO_TRANSCRIBE_PATH = "/v1/audio/transcriptions"
+        private const val WEB_UI_PROXY_PREFIX = "/api/hermes"
+        private const val MAX_HISTORY_MESSAGES = 40
         private const val CONNECT_TIMEOUT = 15_000
         private const val READ_TIMEOUT = 90_000
         private const val AUDIO_UPLOAD_TIMEOUT = 60_000
     }
 
-    private val apiBaseUrl: String = deriveApiBaseUrl(session.baseUrl)
-    private val chatEndpoint = "$apiBaseUrl$CHAT_ENDPOINT_PATH"
-    private val audioTranscribeEndpoint = "$apiBaseUrl$AUDIO_TRANSCRIBE_ENDPOINT_PATH"
-    /** Use apiKey for API Server auth; fall back to accessToken for backward compat */
-    private val accessToken: String = session.apiKey.ifBlank { session.accessToken }
+    private val webUiBaseUrl: String = session.displayUrl.trimEnd('/')
+    private val useWebUiProxy: Boolean = session.apiKey.isBlank()
+    private val bearerToken: String =
+        if (useWebUiProxy) session.accessToken else session.apiKey.ifBlank { session.accessToken }
+
+    private val chatEndpoint: String
+    private val audioTranscribeEndpoint: String
+
     private var activeModel: String = "default"
+
+    init {
+        if (useWebUiProxy) {
+            chatEndpoint = "$webUiBaseUrl$WEB_UI_PROXY_PREFIX$CHAT_PATH"
+            audioTranscribeEndpoint = "$webUiBaseUrl$WEB_UI_PROXY_PREFIX$AUDIO_TRANSCRIBE_PATH"
+        } else {
+            val gatewayBase = deriveGatewayBaseUrl(session.baseUrl)
+            chatEndpoint = "$gatewayBase$CHAT_PATH"
+            audioTranscribeEndpoint = "$gatewayBase$AUDIO_TRANSCRIBE_PATH"
+        }
+    }
 
     override suspend fun sendText(history: List<ChatMessage>, text: String, model: String): AgentReply {
         activeModel = model
@@ -54,8 +65,14 @@ class HttpHermesAgentService(
     }
 
     override suspend fun sendApproval(approvalId: String, approved: Boolean): AgentReply {
+        // Hermes Agent tool approvals use Socket.IO on Web UI (/chat-run), not HTTP.
+        // Keep a clear reply until realtime bridge is wired on Android.
         return AgentReply(
-            text = "Approval (id=$approvalId, approved=$approved) submitted.",
+            text = if (approved) {
+                "已记录批准（$approvalId）。完整工具审批需通过 Hermes Web UI 的实时会话处理。"
+            } else {
+                "已记录拒绝（$approvalId）。"
+            },
             shouldSpeak = false,
             approvalRequest = null
         )
@@ -73,13 +90,14 @@ class HttpHermesAgentService(
             try {
                 val url = URL(audioTranscribeEndpoint)
                 val conn = url.openConnection() as HttpURLConnection
-                conn.requestMethod = "POST"
-                conn.connectTimeout = 5000
-                conn.readTimeout = 5000
-                conn.setRequestProperty("Authorization", "Bearer $accessToken")
+                conn.requestMethod = "OPTIONS"
+                conn.connectTimeout = 5_000
+                conn.readTimeout = 5_000
+                applyAuthHeaders(conn)
+                val code = conn.responseCode
                 conn.disconnect()
-                true
-            } catch (e: Exception) {
+                code != HttpURLConnection.HTTP_NOT_FOUND
+            } catch (_: Exception) {
                 false
             }
         }
@@ -89,7 +107,7 @@ class HttpHermesAgentService(
         return withContext(Dispatchers.IO) {
             try {
                 uploadAudioForTranscription(audioData, sampleRate)
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 null
             }
         }
@@ -104,24 +122,25 @@ class HttpHermesAgentService(
         conn.readTimeout = AUDIO_UPLOAD_TIMEOUT
         conn.doOutput = true
         conn.setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
-        conn.setRequestProperty("Authorization", "Bearer $accessToken")
         conn.setRequestProperty("Accept", "application/json")
+        applyAuthHeaders(conn)
 
         conn.outputStream.use { output ->
-            val body = buildMultipartBody(audioData, sampleRate, boundary)
-            output.write(body)
+            output.write(buildMultipartBody(audioData, boundary))
         }
 
         val responseCode = conn.responseCode
+        val responseBody = readResponseBody(conn, responseCode)
+        conn.disconnect()
+
         return if (responseCode in 200..299) {
-            val responseBody = conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
             parseTranscriptionResponse(responseBody)
         } else {
             null
         }
     }
 
-    private fun buildMultipartBody(audioData: ByteArray, sampleRate: Int, boundary: String): ByteArray {
+    private fun buildMultipartBody(audioData: ByteArray, boundary: String): ByteArray {
         val builder = StringBuilder()
         builder.append("--$boundary\r\n")
         builder.append("Content-Disposition: form-data; name=\"file\"; filename=\"recording.wav\"\r\n")
@@ -137,7 +156,7 @@ class HttpHermesAgentService(
             json.optString("text").takeIf { it.isNotBlank() }
                 ?: json.optString("transcription").takeIf { it.isNotBlank() }
                 ?: json.optJSONArray("results")?.optJSONObject(0)?.optString("transcripts")?.takeIf { it.isNotBlank() }
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             null
         }
     }
@@ -158,10 +177,21 @@ class HttpHermesAgentService(
             }
 
             val json = JSONObject(body)
-            val choices = json.optJSONArray("choices") ?: return@withContext AgentReply(text = body)
+            parseApproval(json)?.let { approval ->
+                val hint = json.optString("text").ifBlank {
+                    json.optString("message").ifBlank { "此操作需要你确认后才能继续。" }
+                }
+                return@withContext AgentReply(
+                    text = hint,
+                    shouldSpeak = false,
+                    approvalRequest = approval
+                )
+            }
 
-            if (choices.length() == 0) {
-                return@withContext AgentReply(text = body)
+            val choices = json.optJSONArray("choices")
+            if (choices == null || choices.length() == 0) {
+                val fallback = json.optString("text").ifBlank { json.optString("error", body) }
+                return@withContext AgentReply(text = fallback)
             }
 
             val choice = choices.getJSONObject(0)
@@ -169,29 +199,48 @@ class HttpHermesAgentService(
             val content = message?.optString("content")?.takeIf { it.isNotBlank() }
                 ?: choice.optString("text", "")
 
+            val approvalInMessage = message?.let { parseApproval(it) }
             AgentReply(
                 text = content.ifBlank { body },
                 shouldSpeak = true,
-                approvalRequest = null
+                approvalRequest = approvalInMessage
             )
         }
     }
 
+    /**
+     * Build OpenAI-style messages. [history] must not include the current user turn;
+     * [newText] is appended once as the latest user message.
+     */
     private fun buildMessages(history: List<ChatMessage>, newText: String): JSONArray {
         val messages = JSONArray()
-        history.forEach { msg ->
-            messages.put(JSONObject()
-                .put("role", when (msg.speaker) {
-                    Speaker.User -> "user"
-                    Speaker.Assistant -> "assistant"
-                    Speaker.System -> "system"
-                })
-                .put("content", msg.text))
-        }
-        messages.put(JSONObject()
-            .put("role", "user")
-            .put("content", newText))
+        history
+            .filter { it.speaker == Speaker.User || it.speaker == Speaker.Assistant }
+            .takeLast(MAX_HISTORY_MESSAGES)
+            .forEach { msg ->
+                messages.put(
+                    JSONObject()
+                        .put("role", if (msg.speaker == Speaker.User) "user" else "assistant")
+                        .put("content", msg.text)
+                )
+            }
+        messages.put(
+            JSONObject()
+                .put("role", "user")
+                .put("content", newText)
+        )
         return messages
+    }
+
+    private fun parseApproval(json: JSONObject): ApprovalRequest? {
+        val approval = json.optJSONObject("approval")
+            ?: json.optJSONObject("approvalRequest")
+            ?: return null
+        val id = approval.optString("id").ifBlank { approval.optString("approval_id") }
+        if (id.isBlank()) return null
+        val title = approval.optString("title").ifBlank { "确认执行 Hermes 操作" }
+        val description = approval.optString("description").ifBlank { approval.optString("command", "") }
+        return ApprovalRequest(id = id, title = title, description = description)
     }
 
     private fun httpPost(urlStr: String, payload: JSONObject): String {
@@ -203,50 +252,54 @@ class HttpHermesAgentService(
         conn.doOutput = true
         conn.setRequestProperty("Content-Type", "application/json; charset=utf-8")
         conn.setRequestProperty("Accept", "application/json")
-        conn.setRequestProperty("Authorization", "Bearer $accessToken")
+        applyAuthHeaders(conn)
 
         OutputStreamWriter(conn.outputStream, Charsets.UTF_8).use { writer ->
             writer.write(payload.toString())
         }
 
         val responseCode = conn.responseCode
-        val responseBody = if (responseCode in 200..299) {
-            conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
-        } else {
-            conn.errorStream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
-        }
+        val responseBody = readResponseBody(conn, responseCode)
         conn.disconnect()
 
         if (responseCode !in 200..299) {
-            error("Hermes Gateway 返回 $responseCode：${responseBody.take(200)}")
+            val hint = when {
+                responseCode == 401 && useWebUiProxy ->
+                    "认证失败：请重新登录 Hermes Web UI，或填写 API Key（来自 ~/.hermes API_SERVER_KEY）。"
+                responseCode == 401 ->
+                    "Gateway 认证失败：请检查登录页中的 API Key 是否与服务器 API_SERVER_KEY 一致。"
+                else -> "Hermes 返回 $responseCode"
+            }
+            error("$hint：${responseBody.take(200)}")
         }
 
         return responseBody
     }
 
-    /**
-     * Derive the API base URL from the user-provided server address.
-     *
-     * The user enters the web UI address (e.g. http://10.1.1.50:80).
-     * The api_server runs on a separate port (default 8642).
-     *
-     * Strategy:
-     * - If the URL already contains port 8642, use it as-is
-     * - Otherwise, replace the port with 8642
-     * - If no port in URL, append :8642
-     */
-    private fun deriveApiBaseUrl(baseUrl: String): String {
-        val trimmed = baseUrl.trimEnd('/')
+    private fun applyAuthHeaders(conn: HttpURLConnection) {
+        if (bearerToken.isNotBlank()) {
+            conn.setRequestProperty("Authorization", "Bearer $bearerToken")
+        }
+    }
 
-        // If already pointing at api_server port, use as-is
+    private fun readResponseBody(conn: HttpURLConnection, responseCode: Int): String {
+        return if (responseCode in 200..299) {
+            conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+        } else {
+            conn.errorStream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
+        }
+    }
+
+    private fun deriveGatewayBaseUrl(baseUrl: String): String {
+        val trimmed = baseUrl.trimEnd('/')
         if (trimmed.contains(":$API_SERVER_PORT")) {
             return trimmed
         }
-
-        // Try to replace the port in the URL
-        val url = try { URL(trimmed) } catch (e: Exception) { return "$trimmed:$API_SERVER_PORT" }
-
-        val newPort = API_SERVER_PORT
-        return "${url.protocol}://${url.host}:$newPort"
+        val url = try {
+            URL(trimmed)
+        } catch (_: Exception) {
+            return "$trimmed:$API_SERVER_PORT"
+        }
+        return "${url.protocol}://${url.host}:$API_SERVER_PORT"
     }
 }
